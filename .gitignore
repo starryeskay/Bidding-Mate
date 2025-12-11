@@ -1,0 +1,23 @@
+
+# 환경 변수 및 키 파일 (절대 올리지 말 것)
+.env
+.env.*
+keys/
+*.key
+
+# 파이썬 자동 생성 파일
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# 대용량 데이터 (GitHub 용량 제한 방지)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+*.hwp
+*.pdf
+
+# 시스템 파일
+.DS_Store
