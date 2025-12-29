@@ -9,6 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 
+
 # 환경변수 로드
 load_dotenv()
 
@@ -27,8 +28,12 @@ class BiddingAgent:
             
         self.vectorstore = Chroma(persist_directory=db_path, embedding_function=self.embeddings)
         self.retriever = self.vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 5}    # 문서 5개 가져오기
+            search_type="mmr",
+            search_kwargs={
+                "k": 10,
+                "fetch_k" : 30,
+                "lambda_mult": 0.6
+            } 
         )
         
         # 2. LangGraph 워크플로우 빌드
@@ -40,6 +45,21 @@ class BiddingAgent:
         context: List[str]
         answer: str
         relevance: str # yes/no
+
+    def _route_question(self, state):
+        print(f"---의도 파악 중: {state['question']}---")
+        router_prompt = ChatPromptTemplate.from_template(
+            "당신은 질문의 의도를 분류하는 라우터입니다.\n"
+            "질문이 공공 입찰, 사업 공고, 제안서 작성 등 '사업 관련 질문'이면 'bid'라고 답하세요.\n"
+            "그 외의 일상적인 질문이나 잡담(음식, 연예, 일반 상식 등)이면 'off-topic'이라고 답하세요.\n\n"
+            "질문: {question}\n"
+            "답변(한 단어):"
+        )
+        chain = router_prompt | self.llm | StrOutputParser()
+        category = chain.invoke({"question": state['question']}).lower()
+        
+        # 'bid'면 통과(yes), 아니면 차단(no)
+        return {"relevance": "yes" if "bid" in category else "no"}
 
     # 노드 함수들
     def _retrieve(self, state):
@@ -64,9 +84,21 @@ class BiddingAgent:
         
         prompt = ChatPromptTemplate.from_template(
             """
-            당신은 공공 입찰(Bidding) 전문가입니다. 
-            아래 제공된 [참고 문서]를 바탕으로 질문에 대해 명확하게 답변하세요.
+            당신은 공공 입찰 및 사업 공고 분석 전문가입니다. 
+            당신의 임무는 오로지 제공된 [참고 문서]의 내용을 바탕으로 질문에 답하는 것입니다.
+
+            [엄격 준수 지침]
+            1. 주제 제한: 질문이 공공 입찰, 사업 내용, 제안서 작성 등 본 사업과 관련 없는 내용(예: 일상 대화, 음식 추천, 일반 상식 등)일 경우, 
+               "죄송합니다. 저는 공고문 분석 전문가로서 해당 질문에 대해서는 답변을 드릴 수 없습니다."라고만 답변하세요.
             
+            2. 근거 기반 답변: 반드시 제공된 [참고 문서]에 명시된 사실만 답변하세요. 
+            
+            3. 정보 부재 시: 질문이 사업과 관련은 있지만 [참고 문서]에 관련 내용이 없는 경우, 
+               "제공된 문서에서 관련 정보를 찾을 수 없습니다."라고 답변하세요.
+
+            4. 사업명 일치 확인: 질문에서 언급한 '사업명'과 [참고 문서]의 '사업명'이 다를 경우, 
+                해당 문서는 무시하고 "관련 정보를 찾을 수 없습니다"라고 답하세요.
+
             [참고 문서]
             {context}
             
@@ -80,24 +112,36 @@ class BiddingAgent:
         return {"answer": response}
 
     def _rewrite_query(self, state):
-        """검색 실패 시 처리"""
-        return {"answer": "죄송합니다. 관련 문서를 찾을 수 없어 답변하기 어렵습니다."}
+        """잡담이거나 검색 실패 시 처리"""
+        return {"answer": "죄송합니다. 저는 공고문 분석 전문가로서 사업 및 입찰과 관련된 질문에만 답변을 드릴 수 있습니다."}
 
     # 그래프 조립
     def _build_graph(self):
         workflow = StateGraph(self.GraphState)
         
-        # 노드 추가
+        # (1) 노드 추가 - router 추가됨
+        workflow.add_node("router", self._route_question) 
         workflow.add_node("retrieve", self._retrieve)
         workflow.add_node("grade", self._grade_documents)
         workflow.add_node("generate", self._generate)
         workflow.add_node("fallback", self._rewrite_query)
         
-        # 엣지 연결
-        workflow.set_entry_point("retrieve")
+        # (2) 시작점을 retrieve에서 router로 변경!
+        workflow.set_entry_point("router")
+        
+        # (3) 라우터 결과에 따른 조건부 분기 추가
+        workflow.add_conditional_edges(
+            "router",
+            lambda x: "proceed" if x["relevance"] == "yes" else "reject",
+            {
+                "proceed": "retrieve", # 사업 질문이면 검색으로
+                "reject": "fallback"   # 잡담이면 바로 거절로
+            }
+        )
+        
+        # (4) 나머지 연결 (기존과 동일)
         workflow.add_edge("retrieve", "grade")
         
-        # 조건부 분기
         def decide_next(state):
             return "generate" if state["relevance"] == "yes" else "fallback"
 
@@ -111,7 +155,14 @@ class BiddingAgent:
     def get_answer(self, question: str):
         inputs = {"question": question}
         result = self.app_workflow.invoke(inputs)
-        return result['answer'], result.get('context', [])
+        
+        # 라우터가 'no'라고 했거나, 답변이 거절 멘트인 경우 컨텍스트를 비움
+        answer = result.get('answer', '')
+        # "죄송합니다"로 시작하는 거절 답변일 경우 참고 문서를 강제로 비웁니다.
+        if "죄송합니다" in answer or result.get('relevance') == 'no':
+            return answer, [] 
+            
+        return answer, result.get('context', [])
     
     def ask_with_context(self, question):
         """
