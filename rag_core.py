@@ -19,7 +19,7 @@ class BiddingAgent:
         초기화: DB 로드, LLM 설정, 그래프(Workflow) 빌드
         """
         self.llm = ChatOpenAI(model=model_name, temperature=0)
-        self.embeddings = OpenAIEmbeddings()
+        self.embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
         
         # 1. DB 연결
         if not os.path.exists(db_path):

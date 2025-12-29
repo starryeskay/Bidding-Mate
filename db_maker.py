@@ -12,8 +12,8 @@ from pdfminer.pdfparser import PDFSyntaxError
 load_dotenv()
 
 # 1. 설정
-PDF_FOLDER = "../../data/raw/100_PDF"   # PDF 원본 폴더
-DB_PATH = "../../chroma_db_final"       # 최종 DB 저장 경로
+PDF_FOLDER = "./data/raw/100_PDF"   # PDF 원본 폴더
+DB_PATH = "./chroma_db_final"      # 최종 DB 저장 경로
 
 # 기존 DB 폴더가 있다면 삭제하고 새로 시작
 if os.path.exists(DB_PATH):

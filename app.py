@@ -1,5 +1,5 @@
 import streamlit as st
-from rag_core import BiddingAgent # 방금 만든 클래스 가져오기!
+from rag_core import BiddingAgent
 
 # 페이지 설정
 st.set_page_config(page_title="Bidding Mate", layout="wide")
