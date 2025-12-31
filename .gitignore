@@ -34,3 +34,7 @@ data/
 
 # Ragas 평가 결과 파일 무시
 ragas_score.csv
+
+# 제로샷 파일 무시
+zero_shot_experiment.py
+zero_shot_results.csv

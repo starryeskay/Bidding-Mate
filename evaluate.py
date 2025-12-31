@@ -33,42 +33,66 @@ rag_system = BiddingAgent()
 
 # 3. 채점관 설정 (온도 1로 초기화)
 judge_llm = GPT5ChatOpenAI(
-    model="gpt-5", 
-    temperature=1  # 초기값도 1로 설정
+    model="gpt-5",  # 실제 사용 가능한 모델명으로 변경 필요 (예: o1-preview, gpt-4o 등)
+    temperature=1   # 초기값도 1로 설정
 )
 judge_embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
 # 4. 테스트 데이터 로드 (JSON 파일 불러오기)
 json_file_path = "test_data.json"
 
+questions = []
+answers = []
+contexts = []
+ground_truths = []
+
 try:
     with open(json_file_path, "r", encoding="utf-8") as f:
-        test_data = json.load(f)
-    print(f"'{json_file_path}'에서 {len(test_data)}개의 테스트 데이터를 불러왔습니다.")
+        raw_data = json.load(f)
+        
+    print("시험을 치고 있습니다...")
+
+    # Case A: {"question": [...], "ground_truth": [...]} 형태 (Dict of Lists)
+    if isinstance(raw_data, dict) and "question" in raw_data and isinstance(raw_data["question"], list):
+        print(f"'{json_file_path}'에서 {len(raw_data['question'])}개의 데이터를 불러옵니다. (Dict of Lists 구조)")
+        
+        # zip으로 묶어서 순회
+        target_questions = raw_data["question"]
+        target_gts = raw_data["ground_truth"]
+        
+        for q_text, gt_text in zip(target_questions, target_gts):
+            # RAG 시스템에 질문 던지기
+            result = rag_system.ask_with_context(q_text)
+            
+            questions.append(result["question"])
+            answers.append(result["answer"])
+            contexts.append(result["contexts"])
+            ground_truths.append(gt_text)
+
+    # Case B: [{"question": "...", "ground_truth": "..."}, ...] 형태 (List of Dicts)
+    elif isinstance(raw_data, list):
+        print(f"'{json_file_path}'에서 {len(raw_data)}개의 데이터를 불러옵니다. (List of Dicts 구조)")
+        for item in raw_data:
+            q_text = item.get("question")
+            gt_text = item.get("ground_truth")
+            
+            result = rag_system.ask_with_context(q_text)
+            
+            questions.append(result["question"])
+            answers.append(result["answer"])
+            contexts.append(result["contexts"])
+            ground_truths.append(gt_text)
+            
+    else:
+        print("지원하지 않는 데이터 형식입니다.")
+        exit()
+
 except FileNotFoundError:
     print(f"오류: '{json_file_path}' 파일을 찾을 수 없습니다.")
     exit()
 except json.JSONDecodeError:
     print(f"오류: '{json_file_path}' 파일 형식이 올바르지 않습니다.")
     exit()
-
-
-print("시험을 치고 있습니다...")
-
-questions = []
-answers = []
-contexts = []
-ground_truths = []
-
-# 데이터셋 구성 루프
-for item in test_data:
-    # RAG 시스템에 질문 던지기
-    result = rag_system.ask_with_context(item["question"])
-    
-    questions.append(result["question"])
-    answers.append(result["answer"])
-    contexts.append(result["contexts"])
-    ground_truths.append(item["ground_truth"])
 
 # 5. 데이터셋 변환
 data = {
@@ -127,7 +151,7 @@ for i, row in df.iterrows():
     # 2. AI 답변 (Ragas가 response로 바꿈)
     a_text = get_col(row, ['response', 'answer'])
     
-    # 3. [핵심 수정] 정답 (Ragas가 reference로 바꿈!!!)
+    # 3. 정답 (Ragas가 reference로 바꿈)
     gt_text = get_col(row, ['reference', 'ground_truth', 'ground_truths'])
     
     # 4. 참고 문서
